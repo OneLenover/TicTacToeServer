@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+option csharp_namespace = "TicTacToe.App.Protos";
+
+service GameService {
+	rpc CreateGame (CreateRequest) returns (GameResponse);
+	rpc MakeMove (MoveRequest) returns (GameResponse);
+	rpc GetState (StateRequest) returns (GameResponse);
+}
+
+message CreateRequest {
+	string playerId = 1;
+}
+
+message StateRequest {
+	string gameId = 1;
+}
+
+message MoveRequest {
+	string gameId = 1;
+	string playerId = 2;
+	int32 x = 3;
+	int32 y = 4;
+}
+
+message GameResponse {
+	string gameId = 1;
+	string board = 2; // Строка из 9 символов, например "X.O...X.."
+	string currentPlayerId = 3;
+	string status = 4; // "Playing", "Won", "Draw"
+	string winnerId = 5;
+}

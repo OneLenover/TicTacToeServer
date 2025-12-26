@@ -1,7 +1,19 @@
-﻿internal class Program
+﻿using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using TicTacToeServer;
+
+internal class Program
 {
-    private static void Main(string[] args)
+    private static async Task Main(string[] args)
     {
-        Console.WriteLine("Hello, World!");
+        try
+        {
+            AppConfig config = AppConfig.Load("appsettings.json");
+            await SimpleGameServer.Run(config.gRPC.Port);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[CRITICAL ERROR] {ex.Message}");
+        }
     }
 }
