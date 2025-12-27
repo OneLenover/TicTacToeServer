@@ -11,6 +11,9 @@ namespace TicTacToeServer
 
         public static AppConfig Load(string path)
         {
+            if (!File.Exists(path))
+                throw new FileNotFoundException($"Файл конфигурации {path} не найден.");
+
             string json = System.IO.File.ReadAllText(path);
             return JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
             {

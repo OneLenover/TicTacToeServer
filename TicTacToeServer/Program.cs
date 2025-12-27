@@ -8,8 +8,14 @@ internal class Program
     {
         try
         {
-            AppConfig config = AppConfig.Load("appsettings.json");
-            await SimpleGameServer.Run(config.gRPC.Port);
+            var portStr = Environment.GetEnvironmentVariable("PORT") ?? "50051";
+            int port = int.Parse(portStr);
+
+            var advertisedIp = Environment.GetEnvironmentVariable("ADVERTISED_IP") ?? "localhost";
+
+            Console.WriteLine($"[START] Port: {port}, Advertising as: {advertisedIp}");
+
+            await SimpleGameServer.Run(port, advertisedIp);
         }
         catch (Exception ex)
         {

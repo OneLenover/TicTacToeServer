@@ -1,0 +1,1115 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+<file_summary>
+This section contains a summary of this file.
+
+<purpose>
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+</purpose>
+
+<file_format>
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Repository files (if enabled)
+5. Multiple file entries, each consisting of:
+  - File path as an attribute
+  - Full contents of the file
+</file_format>
+
+<usage_guidelines>
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+</usage_guidelines>
+
+<notes>
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+</notes>
+
+</file_summary>
+
+<directory_structure>
+.gitattributes
+.gitignore
+TicTacToeServer.slnx
+TicTacToeServer/AppConfig.cs
+TicTacToeServer/GameLogicService.cs
+TicTacToeServer/GameRepository.cs
+TicTacToeServer/Program.cs
+TicTacToeServer/Protos/GameService.proto
+TicTacToeServer/SimpleGameServer.cs
+TicTacToeServer/TicTacToeServer.csproj
+</directory_structure>
+
+<files>
+This section contains the contents of the repository's files.
+
+<file path="TicTacToeServer/GameRepository.cs">
+using Npgsql;
+using TicTacToe.App.Protos;
+
+public class GameRepository
+{
+    private readonly string _connectionString;
+
+    public GameRepository(string connectionString) => _connectionString = connectionString;
+
+    public async Task UpsertGame(GameResponse game)
+    {
+        using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+
+        const string sql = @"
+            INSERT INTO games (game_id, player_x, player_o, player_x_score, player_o_score, board, status, current_player_id, winner_id, winning_line)
+            VALUES (@id, @px, @po, @pxs, @pos, @board, @status, @curr, @win, @line)
+            ON CONFLICT (game_id) DO UPDATE SET
+                player_x = EXCLUDED.player_x, player_o = EXCLUDED.player_o,
+                player_x_score = EXCLUDED.player_x_score, player_o_score = EXCLUDED.player_o_score,
+                board = EXCLUDED.board, status = EXCLUDED.status,
+                current_player_id = EXCLUDED.current_player_id, winner_id = EXCLUDED.winner_id,
+                winning_line = EXCLUDED.winning_line;";
+
+        using var cmd = new NpgsqlCommand(sql, conn);
+        cmd.Parameters.AddWithValue("id", game.GameId);
+        cmd.Parameters.AddWithValue("px", game.PlayerXId);
+        cmd.Parameters.AddWithValue("po", game.PlayerOId);
+        cmd.Parameters.AddWithValue("pxs", game.PlayerXScore);
+        cmd.Parameters.AddWithValue("pos", game.PlayerOScore);
+        cmd.Parameters.AddWithValue("board", game.Board);
+        cmd.Parameters.AddWithValue("status", game.Status);
+        cmd.Parameters.AddWithValue("curr", game.CurrentPlayerId);
+        cmd.Parameters.AddWithValue("win", game.WinnerId);
+        cmd.Parameters.AddWithValue("line", game.WinningLine.ToArray());
+        await cmd.ExecuteNonQueryAsync();
+    }
+
+    public async Task<GameResponse?> GetGame(string gameId)
+    {
+        using var conn = new NpgsqlConnection(_connectionString);
+        await conn.OpenAsync();
+        using var cmd = new NpgsqlCommand("SELECT * FROM games WHERE game_id = @id", conn);
+        cmd.Parameters.AddWithValue("id", gameId);
+        using var reader = await cmd.ExecuteReaderAsync();
+
+        if (await reader.ReadAsync())
+        {
+            var resp = new GameResponse
+            {
+                GameId = reader.GetString(0),
+                PlayerXId = reader.GetString(1),
+                PlayerOId = reader.GetString(2),
+                PlayerXScore = reader.GetInt32(3),
+                PlayerOScore = reader.GetInt32(4),
+                Board = reader.GetString(5),
+                Status = reader.GetString(6),
+                CurrentPlayerId = reader.GetString(7),
+                WinnerId = reader.GetString(8)
+            };
+
+            if (!await reader.IsDBNullAsync(9))
+            {
+                var line = await reader.GetFieldValueAsync<int[]>(9);
+                resp.WinningLine.AddRange(line);
+            }
+
+            return resp;
+        }
+        return null;
+    }
+}
+</file>
+
+<file path=".gitattributes">
+###############################################################################
+# Set default behavior to automatically normalize line endings.
+###############################################################################
+* text=auto
+
+###############################################################################
+# Set default behavior for command prompt diff.
+#
+# This is need for earlier builds of msysgit that does not have it on by
+# default for csharp files.
+# Note: This is only used by command line
+###############################################################################
+#*.cs     diff=csharp
+
+###############################################################################
+# Set the merge driver for project and solution files
+#
+# Merging from the command prompt will add diff markers to the files if there
+# are conflicts (Merging from VS is not affected by the settings below, in VS
+# the diff markers are never inserted). Diff markers may cause the following 
+# file extensions to fail to load in VS. An alternative would be to treat
+# these files as binary and thus will always conflict and require user
+# intervention with every merge. To do so, just uncomment the entries below
+###############################################################################
+#*.sln       merge=binary
+#*.csproj    merge=binary
+#*.vbproj    merge=binary
+#*.vcxproj   merge=binary
+#*.vcproj    merge=binary
+#*.dbproj    merge=binary
+#*.fsproj    merge=binary
+#*.lsproj    merge=binary
+#*.wixproj   merge=binary
+#*.modelproj merge=binary
+#*.sqlproj   merge=binary
+#*.wwaproj   merge=binary
+
+###############################################################################
+# behavior for image files
+#
+# image files are treated as binary by default.
+###############################################################################
+#*.jpg   binary
+#*.png   binary
+#*.gif   binary
+
+###############################################################################
+# diff behavior for common document formats
+# 
+# Convert binary document formats to text before diffing them. This feature
+# is only available from the command line. Turn it on by uncommenting the 
+# entries below.
+###############################################################################
+#*.doc   diff=astextplain
+#*.DOC   diff=astextplain
+#*.docx  diff=astextplain
+#*.DOCX  diff=astextplain
+#*.dot   diff=astextplain
+#*.DOT   diff=astextplain
+#*.pdf   diff=astextplain
+#*.PDF   diff=astextplain
+#*.rtf   diff=astextplain
+#*.RTF   diff=astextplain
+</file>
+
+<file path=".gitignore">
+## Ignore Visual Studio temporary files, build results, and
+## files generated by popular Visual Studio add-ons.
+##
+## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
+
+# User-specific files
+*.rsuser
+*.suo
+*.user
+*.userosscache
+*.sln.docstates
+
+# User-specific files (MonoDevelop/Xamarin Studio)
+*.userprefs
+
+# Mono auto generated files
+mono_crash.*
+
+# Build results
+[Dd]ebug/
+[Dd]ebugPublic/
+[Rr]elease/
+[Rr]eleases/
+x64/
+x86/
+[Ww][Ii][Nn]32/
+[Aa][Rr][Mm]/
+[Aa][Rr][Mm]64/
+bld/
+[Bb]in/
+[Oo]bj/
+[Oo]ut/
+[Ll]og/
+[Ll]ogs/
+
+# Visual Studio 2015/2017 cache/options directory
+.vs/
+# Uncomment if you have tasks that create the project's static files in wwwroot
+#wwwroot/
+
+# Visual Studio 2017 auto generated files
+Generated\ Files/
+
+# MSTest test Results
+[Tt]est[Rr]esult*/
+[Bb]uild[Ll]og.*
+
+# NUnit
+*.VisualState.xml
+TestResult.xml
+nunit-*.xml
+
+# Build Results of an ATL Project
+[Dd]ebugPS/
+[Rr]eleasePS/
+dlldata.c
+
+# Benchmark Results
+BenchmarkDotNet.Artifacts/
+
+# .NET Core
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# ASP.NET Scaffolding
+ScaffoldingReadMe.txt
+
+# StyleCop
+StyleCopReport.xml
+
+# Files built by Visual Studio
+*_i.c
+*_p.c
+*_h.h
+*.ilk
+*.meta
+*.obj
+*.iobj
+*.pch
+*.pdb
+*.ipdb
+*.pgc
+*.pgd
+*.rsp
+*.sbr
+*.tlb
+*.tli
+*.tlh
+*.tmp
+*.tmp_proj
+*_wpftmp.csproj
+*.log
+*.vspscc
+*.vssscc
+.builds
+*.pidb
+*.svclog
+*.scc
+
+# Chutzpah Test files
+_Chutzpah*
+
+# Visual C++ cache files
+ipch/
+*.aps
+*.ncb
+*.opendb
+*.opensdf
+*.sdf
+*.cachefile
+*.VC.db
+*.VC.VC.opendb
+
+# Visual Studio profiler
+*.psess
+*.vsp
+*.vspx
+*.sap
+
+# Visual Studio Trace Files
+*.e2e
+
+# TFS 2012 Local Workspace
+$tf/
+
+# Guidance Automation Toolkit
+*.gpState
+
+# ReSharper is a .NET coding add-in
+_ReSharper*/
+*.[Rr]e[Ss]harper
+*.DotSettings.user
+
+# TeamCity is a build add-in
+_TeamCity*
+
+# DotCover is a Code Coverage Tool
+*.dotCover
+
+# AxoCover is a Code Coverage Tool
+.axoCover/*
+!.axoCover/settings.json
+
+# Coverlet is a free, cross platform Code Coverage Tool
+coverage*.json
+coverage*.xml
+coverage*.info
+
+# Visual Studio code coverage results
+*.coverage
+*.coveragexml
+
+# NCrunch
+_NCrunch_*
+.*crunch*.local.xml
+nCrunchTemp_*
+
+# MightyMoose
+*.mm.*
+AutoTest.Net/
+
+# Web workbench (sass)
+.sass-cache/
+
+# Installshield output folder
+[Ee]xpress/
+
+# DocProject is a documentation generator add-in
+DocProject/buildhelp/
+DocProject/Help/*.HxT
+DocProject/Help/*.HxC
+DocProject/Help/*.hhc
+DocProject/Help/*.hhk
+DocProject/Help/*.hhp
+DocProject/Help/Html2
+DocProject/Help/html
+
+# Click-Once directory
+publish/
+
+# Publish Web Output
+*.[Pp]ublish.xml
+*.azurePubxml
+# Note: Comment the next line if you want to checkin your web deploy settings,
+# but database connection strings (with potential passwords) will be unencrypted
+*.pubxml
+*.publishproj
+
+# Microsoft Azure Web App publish settings. Comment the next line if you want to
+# checkin your Azure Web App publish settings, but sensitive information contained
+# in these scripts will be unencrypted
+PublishScripts/
+
+# NuGet Packages
+*.nupkg
+# NuGet Symbol Packages
+*.snupkg
+# The packages folder can be ignored because of Package Restore
+**/[Pp]ackages/*
+# except build/, which is used as an MSBuild target.
+!**/[Pp]ackages/build/
+# Uncomment if necessary however generally it will be regenerated when needed
+#!**/[Pp]ackages/repositories.config
+# NuGet v3's project.json files produces more ignorable files
+*.nuget.props
+*.nuget.targets
+
+# Microsoft Azure Build Output
+csx/
+*.build.csdef
+
+# Microsoft Azure Emulator
+ecf/
+rcf/
+
+# Windows Store app package directories and files
+AppPackages/
+BundleArtifacts/
+Package.StoreAssociation.xml
+_pkginfo.txt
+*.appx
+*.appxbundle
+*.appxupload
+
+# Visual Studio cache files
+# files ending in .cache can be ignored
+*.[Cc]ache
+# but keep track of directories ending in .cache
+!?*.[Cc]ache/
+
+# Others
+ClientBin/
+~$*
+*~
+*.dbmdl
+*.dbproj.schemaview
+*.jfm
+*.pfx
+*.publishsettings
+orleans.codegen.cs
+
+# Including strong name files can present a security risk
+# (https://github.com/github/gitignore/pull/2483#issue-259490424)
+#*.snk
+
+# Since there are multiple workflows, uncomment next line to ignore bower_components
+# (https://github.com/github/gitignore/pull/1529#issuecomment-104372622)
+#bower_components/
+
+# RIA/Silverlight projects
+Generated_Code/
+
+# Backup & report files from converting an old project file
+# to a newer Visual Studio version. Backup files are not needed,
+# because we have git ;-)
+_UpgradeReport_Files/
+Backup*/
+UpgradeLog*.XML
+UpgradeLog*.htm
+ServiceFabricBackup/
+*.rptproj.bak
+
+# SQL Server files
+*.mdf
+*.ldf
+*.ndf
+
+# Business Intelligence projects
+*.rdl.data
+*.bim.layout
+*.bim_*.settings
+*.rptproj.rsuser
+*- [Bb]ackup.rdl
+*- [Bb]ackup ([0-9]).rdl
+*- [Bb]ackup ([0-9][0-9]).rdl
+
+# Microsoft Fakes
+FakesAssemblies/
+
+# GhostDoc plugin setting file
+*.GhostDoc.xml
+
+# Node.js Tools for Visual Studio
+.ntvs_analysis.dat
+node_modules/
+
+# Visual Studio 6 build log
+*.plg
+
+# Visual Studio 6 workspace options file
+*.opt
+
+# Visual Studio 6 auto-generated workspace file (contains which files were open etc.)
+*.vbw
+
+# Visual Studio LightSwitch build output
+**/*.HTMLClient/GeneratedArtifacts
+**/*.DesktopClient/GeneratedArtifacts
+**/*.DesktopClient/ModelManifest.xml
+**/*.Server/GeneratedArtifacts
+**/*.Server/ModelManifest.xml
+_Pvt_Extensions
+
+# Paket dependency manager
+.paket/paket.exe
+paket-files/
+
+# FAKE - F# Make
+.fake/
+
+# CodeRush personal settings
+.cr/personal
+
+# Python Tools for Visual Studio (PTVS)
+__pycache__/
+*.pyc
+
+# Cake - Uncomment if you are using it
+# tools/**
+# !tools/packages.config
+
+# Tabs Studio
+*.tss
+
+# Telerik's JustMock configuration file
+*.jmconfig
+
+# BizTalk build output
+*.btp.cs
+*.btm.cs
+*.odx.cs
+*.xsd.cs
+
+# OpenCover UI analysis results
+OpenCover/
+
+# Azure Stream Analytics local run output
+ASALocalRun/
+
+# MSBuild Binary and Structured Log
+*.binlog
+
+# NVidia Nsight GPU debugger configuration file
+*.nvuser
+
+# MFractors (Xamarin productivity tool) working folder
+.mfractor/
+
+# Local History for Visual Studio
+.localhistory/
+
+# BeatPulse healthcheck temp database
+healthchecksdb
+
+# Backup folder for Package Reference Convert tool in Visual Studio 2017
+MigrationBackup/
+
+# Ionide (cross platform F# VS Code tools) working folder
+.ionide/
+
+# Fody - auto-generated XML schema
+FodyWeavers.xsd
+</file>
+
+<file path="TicTacToeServer.slnx">
+<Solution>
+  <Project Path="TicTacToeServer/TicTacToeServer.csproj" />
+</Solution>
+</file>
+
+<file path="TicTacToeServer/AppConfig.cs">
+using System;
+using System.Collections.Generic;
+using System.Text;
+using System.Text.Json;
+
+namespace TicTacToeServer
+{
+    public class AppConfig
+    {
+        public GrpcConfig gRPC { get; set; } = null!;
+
+        public static AppConfig Load(string path)
+        {
+            if (!File.Exists(path))
+                throw new FileNotFoundException($"Файл конфигурации {path} не найден.");
+
+            string json = System.IO.File.ReadAllText(path);
+            return JsonSerializer.Deserialize<AppConfig>(json, new JsonSerializerOptions
+            {
+                PropertyNameCaseInsensitive = true
+            })!;
+        }
+    }
+
+    public class GrpcConfig
+    {
+        public string Host { get; set; } = null!;
+        public int Port { get; set; }
+    }
+}
+</file>
+
+<file path="TicTacToeServer/GameLogicService.cs">
+using Grpc.Core;
+using Npgsql;
+using System.Collections.Concurrent;
+using TicTacToe.App.Protos;
+
+namespace TicTacToeServer
+{
+    public class GameLogicService : GameService.GameServiceBase
+    {
+        private class GameSession
+        {
+            // Храним внутреннее состояние на сервере
+            public string GameId { get; init; } = default!;
+            public string PlayerX { get; set; } = null!;
+            public string? PlayerO { get; set; }
+            public int PlayerXScore { get; set; } = 0;
+            public int PlayerOScore { get; set; } = 0;
+            public string Board { get; set; } = ".........";
+            public string Status { get; set; } = "Waiting";
+            public string CurrentPlayerId { get; set; } = null!;
+            public string WinnerId { get; set; } = "";
+            public List<int> WinningLine { get; } = new List<int>();
+
+            // Подписчики (стримы) этого сеанса
+            public ConcurrentDictionary<Guid, IServerStreamWriter<GameResponse>> Subscribers { get; } = new();
+
+            // Лок для синхронизации изменений сессии
+            public object SyncRoot { get; } = new object();
+
+            // Возвращает снимок GameResponse (чтобы не передавать ссылку на изменяемый объект)
+            public GameResponse CreateSnapshot()
+            {
+                lock (SyncRoot)
+                {
+                    var resp = new GameResponse
+                    {
+                        GameId = GameId,
+                        Board = Board,
+                        CurrentPlayerId = CurrentPlayerId ?? "",
+                        Status = Status,
+                        WinnerId = WinnerId ?? "",
+                        PlayerXId = PlayerX ?? "",
+                        PlayerOId = PlayerO ?? "",
+                        PlayerXScore = PlayerXScore,
+                        PlayerOScore = PlayerOScore
+                    };
+                    resp.WinningLine.AddRange(WinningLine);
+                    return resp;
+                }
+            }
+            public static GameSession FromResponse(GameResponse res)
+            {
+                var session = new GameSession
+                {
+                    GameId = res.GameId,
+                    PlayerX = res.PlayerXId,
+                    PlayerO = string.IsNullOrEmpty(res.PlayerOId) ? null : res.PlayerOId,
+                    PlayerXScore = res.PlayerXScore,
+                    PlayerOScore = res.PlayerOScore,
+                    Board = res.Board,
+                    Status = res.Status,
+                    CurrentPlayerId = res.CurrentPlayerId,
+                    WinnerId = res.WinnerId
+                };
+                session.WinningLine.AddRange(res.WinningLine);
+                return session;
+            }
+        }
+        private static readonly string _dbConn = Environment.GetEnvironmentVariable("DB_CONNECTION")
+            ?? "Host=localhost;Port=5432;Username=postgres;Password=mysecretpassword;Database=tictactoe";
+
+        public static GameRepository _repository = new(_dbConn);
+
+        private static readonly ConcurrentDictionary<string, GameSession> _sessions = new();
+
+        // Помощник для синхронизации памяти и БД
+        private async Task<GameSession> EnsureSessionAsync(string gameId)
+        {
+            if (_sessions.TryGetValue(gameId, out var session)) return session;
+
+            // Если в памяти нет, ищем в БД
+            var dbGame = await _repository.GetGame(gameId);
+            if (dbGame != null)
+            {
+                return _sessions.GetOrAdd(gameId, _ => GameSession.FromResponse(dbGame));
+            }
+
+            // Если и в БД нет, создаем новую
+            return _sessions.GetOrAdd(gameId, id => new GameSession { GameId = id });
+        }
+
+        // CreateGame: регистрирует игрока в комнате (gameId по умолчанию "room_1")
+        public override async Task<GameResponse> CreateGame(CreateRequest request, ServerCallContext context)
+        {
+            var gameId = string.IsNullOrWhiteSpace(request.GameId) ? "room_1" : request.GameId;
+            var session = await EnsureSessionAsync(gameId);
+
+            lock (session.SyncRoot)
+            {
+                if (string.IsNullOrEmpty(session.PlayerX))
+                {
+                    session.PlayerX = request.PlayerId;
+                    session.CurrentPlayerId = session.PlayerX;
+                }
+                else if (session.PlayerX != request.PlayerId && session.PlayerO == null)
+                {
+                    session.PlayerO = request.PlayerId;
+                    session.Status = "Playing";
+                    session.CurrentPlayerId = session.PlayerX;
+                }
+            }
+
+            await _repository.UpsertGame(session.CreateSnapshot());
+            BroadcastSessionUpdate(gameId);
+            return session.CreateSnapshot();
+        }
+
+        // Подписка на стрим игровых событий
+        public override async Task SubscribeGameEvents(StateRequest request, IServerStreamWriter<GameResponse> responseStream, ServerCallContext context)
+        {
+            var gameId = string.IsNullOrWhiteSpace(request.GameId) ? "room_1" : request.GameId;
+            var session = _sessions.GetOrAdd(gameId, id => new GameSession { GameId = id });
+
+            var subscriberId = Guid.NewGuid();
+            session.Subscribers[subscriberId] = responseStream;
+
+            // Сразу отправляем текущее состояние (снимок)
+            try
+            {
+                await responseStream.WriteAsync(session.CreateSnapshot());
+            }
+            catch
+            {
+                // возможная ошибка при записи — удалим подписчика
+                session.Subscribers.TryRemove(subscriberId, out _);
+                return;
+            }
+
+            try
+            {
+                // ждём отмены со стороны клиента
+                await Task.Delay(-1, context.CancellationToken);
+            }
+            catch (OperationCanceledException)
+            {
+                // клиент отключился
+            }
+            finally
+            {
+                session.Subscribers.TryRemove(subscriberId, out _);
+
+                // Если в сессии нет игроков и нет подписчиков — можно удалить сессию, чтобы не накапливать
+                if (string.IsNullOrEmpty(session.PlayerX) && session.PlayerO == null && session.Subscribers.IsEmpty)
+                {
+                    _sessions.TryRemove(gameId, out _);
+                }
+            }
+        }
+
+        // Универсальная безопасная рассылка (Snapshot пишем каждому подписчику отдельно)
+        private void BroadcastSessionUpdate(string gameId)
+        {
+            if (!_sessions.TryGetValue(gameId, out var session)) return;
+
+            GameResponse snapshot;
+
+            lock (session.SyncRoot)
+            {
+                snapshot = session.CreateSnapshot();
+            }
+
+            foreach (var kv in session.Subscribers)
+            {
+                var writer = kv.Value;
+                // Fire-and-forget: каждое письмо в try/catch, при ошибке удаляем подписчика
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await writer.WriteAsync(snapshot);
+                    }
+                    catch
+                    {
+                        session.Subscribers.TryRemove(kv.Key, out _);
+                    }
+                });
+            }
+        }
+
+        // MakeMove: выполняет валидации и изменяет состояние на сервере
+        public override Task<GameResponse> MakeMove(MoveRequest request, ServerCallContext context)
+        {
+            if (!_sessions.TryGetValue(request.GameId, out var session))
+                throw new RpcException(new Status(StatusCode.NotFound, "Игра не найдена"));
+
+            lock (session.SyncRoot)
+            {
+                if (session.Status != "Playing")
+                    throw new RpcException(new Status(StatusCode.FailedPrecondition, "Игра не в состоянии Playing"));
+
+                if (session.CurrentPlayerId != request.PlayerId)
+                    throw new RpcException(new Status(StatusCode.FailedPrecondition, "Не ваш ход"));
+
+                if (request.X < 0 || request.X > 2 || request.Y < 0 || request.Y > 2)
+                    throw new RpcException(new Status(StatusCode.InvalidArgument, "Неверные координаты"));
+
+                int index = request.X * 3 + request.Y;
+                if (index < 0 || index >= 9)
+                    throw new RpcException(new Status(StatusCode.InvalidArgument, "Неверный индекс"));
+
+                char[] board = session.Board.ToCharArray();
+                if (board[index] != '.') throw new RpcException(new Status(StatusCode.InvalidArgument, "Ячейка занята"));
+
+                char symbol = (request.PlayerId == session.PlayerX) ? 'X' : 'O';
+                // защитимся: если игрок неизвестен — ошибка
+                if (request.PlayerId != session.PlayerX && request.PlayerId != session.PlayerO)
+                    throw new RpcException(new Status(StatusCode.PermissionDenied, "Игрок не участвует в этой игре"));
+
+                board[index] = symbol;
+                session.Board = new string(board);
+
+                // Сбрасываем прошлую победную линию
+                session.WinningLine.Clear();
+                session.WinnerId = "";
+
+                if (CheckWin(session.Board, out var winningLine))
+                {
+                    session.Status = "Won";
+                    session.WinnerId = request.PlayerId;
+                    session.WinningLine.AddRange(winningLine);
+
+                    // Обновляем счёт
+                    if (request.PlayerId == session.PlayerX) session.PlayerXScore++;
+                    else session.PlayerOScore++;
+                }
+                else if (!session.Board.Contains('.'))
+                {
+                    session.Status = "Draw";
+                }
+                else
+                {
+                    // переключаем текущего игрока
+                    session.CurrentPlayerId = (symbol == 'X') ? session.PlayerO ?? session.PlayerX : session.PlayerX;
+                }
+            }
+
+            // Рассылаем обновлённое состояние
+            BroadcastSessionUpdate(request.GameId);
+
+            return Task.FromResult(_sessions[request.GameId].CreateSnapshot());
+        }
+
+        // Сбрасывает поле для следующего раунда, не трогая очки
+        public override Task<GameResponse> ResetRound(StateRequest request, ServerCallContext context)
+        {
+            if (!_sessions.TryGetValue(request.GameId, out var session))
+                throw new RpcException(new Status(StatusCode.NotFound, "Игра не найдена"));
+
+            lock (session.SyncRoot)
+            {
+                session.Board = ".........";
+                session.WinnerId = "";
+                session.WinningLine.Clear();
+                // Если оба игрока есть — статус Playing и ход у X
+                if (!string.IsNullOrEmpty(session.PlayerX) && !string.IsNullOrEmpty(session.PlayerO))
+                {
+                    session.Status = "Playing";
+                    session.CurrentPlayerId = session.PlayerX;
+                }
+                else
+                {
+                    session.Status = "Waiting";
+                    session.CurrentPlayerId = session.PlayerX ?? "";
+                }
+            }
+
+            BroadcastSessionUpdate(request.GameId);
+            return Task.FromResult(session.CreateSnapshot());
+        }
+
+        // Простой метод получения состояния без подписки
+        public override Task<GameResponse> GetState(StateRequest request, ServerCallContext context)
+        {
+            var gameId = string.IsNullOrWhiteSpace(request.GameId) ? "room_1" : request.GameId;
+            if (!_sessions.TryGetValue(gameId, out var session))
+                throw new RpcException(new Status(StatusCode.NotFound, "Игра не найдена"));
+            return Task.FromResult(session.CreateSnapshot());
+        }
+
+        // Проверка победы — возвращает true и линию победы (индексы 0..8)
+        private bool CheckWin(string b, out int[] winningLine)
+        {
+            int[][] patterns = {
+                new[] { 0, 1, 2 }, new[] { 3, 4, 5 }, new[] { 6, 7, 8 }, // Горизонтали
+                new[] { 0, 3, 6 }, new[] { 1, 4, 7 }, new[] { 2, 5, 8 }, // Вертикали
+                new[] { 0, 4, 8 }, new[] { 2, 4, 6 }  // Диагонали
+            };
+
+            if (b == null || b.Length != 9) { winningLine = Array.Empty<int>(); return false; }
+
+            foreach (var p in patterns)
+            {
+                char a = b[p[0]];
+                if (a != '.' && a == b[p[1]] && a == b[p[2]])
+                {
+                    winningLine = p;
+                    return true;
+                }
+            }
+
+            winningLine = Array.Empty<int>();
+            return false;
+        }
+    }
+}
+</file>
+
+<file path="TicTacToeServer/Protos/GameService.proto">
+syntax = "proto3";
+
+option csharp_namespace = "TicTacToe.App.Protos";
+
+service GameService {
+	rpc CreateGame (CreateRequest) returns (GameResponse);
+	rpc MakeMove (MoveRequest) returns (GameResponse);
+	rpc GetState (StateRequest) returns (GameResponse);
+
+	rpc SubscribeGameEvents (StateRequest) returns (stream GameResponse);
+	rpc ResetRound (StateRequest) returns (GameResponse);
+}
+
+message CreateRequest {
+	string playerId = 1;
+	string gameId = 2;
+}
+
+message StateRequest {
+	string gameId = 1;
+}
+
+message MoveRequest {
+	string gameId = 1;
+	string playerId = 2;
+	int32 x = 3;
+	int32 y = 4;
+}
+
+message GameResponse {
+	string gameId = 1;
+	string board = 2; // Строка из 9 символов, например "X.O...X.."
+	string currentPlayerId = 3;
+	string status = 4; // "Playing", "Won", "Draw"
+	string winnerId = 5;
+
+	string playerXId = 10;
+	string playerOId = 11;
+	int32 playerXScore = 12;
+	int32 playerOScore = 13;
+
+	repeated int32 winningLine = 6;
+}
+</file>
+
+<file path="TicTacToeServer/SimpleGameServer.cs">
+using Consul;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.Extensions.DependencyInjection;
+using System;
+using System.Collections.Generic;
+using System.Text;
+
+namespace TicTacToeServer
+{
+    public static class SimpleGameServer
+    {
+        private static readonly string LeaderKey = "service/tic-tac-toe/leader";
+
+        private static readonly IConsulClient _consulClient = new ConsulClient(c => {
+            c.Address = new Uri("http://localhost:8500");
+        });
+        public static async Task Run(int port, string hostIp)
+        {
+            //  Создаем сессию с минимальным TTL 10с и LockDelay 0 для скорости
+            var sessionRes = await _consulClient.Session.Create(new SessionEntry
+            {
+                Name = $"TicTacToe-Logic-{port}",
+                TTL = TimeSpan.FromSeconds(10),
+                Behavior = SessionBehavior.Release,
+                LockDelay = TimeSpan.Zero
+            });
+            string sessionId = sessionRes.Response;
+
+            // Мгновенное освобождение лидерства при нажатии Ctrl+C
+            Console.CancelKeyPress += (s, e) => {
+                e.Cancel = true; // Предотвращаем немедленное убивание процесса
+                Console.WriteLine("\n[Consul] Завершение работы, освобождаю лидерство...");
+                try
+                {
+                    _consulClient.Session.Destroy(sessionId).Wait();
+                }
+                catch { }
+                Environment.Exit(0);
+            };
+
+            // Продление сессии (фоновая задача)
+            _ = Task.Run(async () => {
+                while (true)
+                {
+                    try { await _consulClient.Session.Renew(sessionId); await Task.Delay(5000); }
+                    catch { break; }
+                }
+            });
+
+            Console.WriteLine($"[Consul] Ожидание лидерства на порту {port}...");
+
+            while (true)
+            {
+                var kvPair = new KVPair(LeaderKey)
+                {
+                    Value = Encoding.UTF8.GetBytes($"http://{hostIp}:{port}"),
+                    Session = sessionId
+                };
+
+                bool isLeader = (await _consulClient.KV.Acquire(kvPair)).Response;
+
+                if (isLeader)
+                {
+                    Console.WriteLine("\">>> Я ЛИДЕР. Запуск gRPC...");
+                    await StartHost(port);
+                    break;
+                }
+                await Task.Delay(1000);
+            }
+        }
+
+        private static async Task StartHost(int port) 
+        {
+            var builder = WebApplication.CreateBuilder();
+            builder.Services.AddGrpc();
+            builder.WebHost.ConfigureKestrel(o =>
+            {
+                o.ListenAnyIP(port, o => o.Protocols = Microsoft.AspNetCore.Server.Kestrel.Core.HttpProtocols.Http2);
+            });
+
+            var app = builder.Build();
+            app.MapGrpcService<GameLogicService>();
+            await app.RunAsync();
+        }
+    }
+}
+</file>
+
+<file path="TicTacToeServer/Program.cs">
+using Microsoft.AspNetCore.Builder;
+using Microsoft.Extensions.DependencyInjection;
+using TicTacToeServer;
+
+internal class Program
+{
+    private static async Task Main(string[] args)
+    {
+        try
+        {
+            var portStr = Environment.GetEnvironmentVariable("PORT") ?? "50051";
+            int port = int.Parse(portStr);
+
+            var advertisedIp = Environment.GetEnvironmentVariable("ADVERTISED_IP") ?? "localhost";
+
+            Console.WriteLine($"[START] Port: {port}, Advertising as: {advertisedIp}");
+
+            await SimpleGameServer.Run(port, advertisedIp);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[CRITICAL ERROR] {ex.Message}");
+        }
+    }
+}
+</file>
+
+<file path="TicTacToeServer/TicTacToeServer.csproj">
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+	
+	<ItemGroup>
+		<Protobuf Include="Protos\GameService.proto" GrpcServices="Server" />
+	</ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Consul" Version="1.7.14.9" />
+    <PackageReference Include="Google.Protobuf" Version="3.33.2" />
+    <PackageReference Include="Grpc" Version="2.46.6" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.76.0">
+      <PrivateAssets>all</PrivateAssets>
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+    </PackageReference>
+    <PackageReference Include="Npgsql" Version="10.0.1" />
+  </ItemGroup>
+
+</Project>
+</file>
+
+</files>
