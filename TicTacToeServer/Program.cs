@@ -38,6 +38,8 @@ app.Lifetime.ApplicationStarted.Register(async () =>
         var hostIp = GetLocalIPAddress();
         var serviceId = $"tictactoe-{port}";
 
+        Console.WriteLine($"[Consul] Регистрация сервиса {serviceId} на {hostIp}:{port} (Consul: {consulAddr})");
+
         await consul.Agent.ServiceRegister(new AgentServiceRegistration
         {
             ID = serviceId,
@@ -47,8 +49,8 @@ app.Lifetime.ApplicationStarted.Register(async () =>
             Check = new AgentServiceCheck
             {
                 TCP = $"{hostIp}:{port}",
-                Interval = TimeSpan.FromSeconds(5),
-                DeregisterCriticalServiceAfter = TimeSpan.FromSeconds(30)
+                Interval = TimeSpan.FromSeconds(1),
+                DeregisterCriticalServiceAfter = TimeSpan.FromSeconds(1)
             }
         });
 
@@ -66,22 +68,34 @@ app.Lifetime.ApplicationStarted.Register(async () =>
                     {
                         Name = $"tictactoe-leader-{port}",
                         TTL = TimeSpan.FromSeconds(10),
-                        Behavior = SessionBehavior.Delete
+                        Behavior = SessionBehavior.Release
                     });
                     sessionId = sessResp.Response;
+                    Console.WriteLine($"[Leader] Создана сессия {sessionId}");
 
                     var kv = new KVPair(leaderKey) { Session = sessionId, Value = Encoding.UTF8.GetBytes(myUrl) };
                     var acquired = (await consul.KV.Acquire(kv)).Response;
 
                     if (acquired)
                     {
+                        Console.WriteLine($"[Leader] Сервер {port} стал лидером (сессия {sessionId})");
+
                         while (acquired && !app.Lifetime.ApplicationStopping.IsCancellationRequested)
                         {
                             await consul.Session.Renew(sessionId);
-                            await Task.Delay(3000);
+                            await Task.Delay(500);
                             var current = await consul.KV.Get(leaderKey);
-                            if (current.Response == null || current.Response.Session != sessionId) break;
+                            if (current.Response == null || current.Response.Session != sessionId)
+                            {
+                                Console.WriteLine("[Leader] Лидерство потеряно (несоответствие сессии)");
+                                break;
+                            }
                         }
+                    }
+                    else
+                    {
+                        Console.WriteLine("[Leader] Не удалось стать лидером, ожидание...");
+                        await Task.Delay(1000);
                     }
                 }
                 catch { await Task.Delay(2000); }
@@ -106,7 +120,7 @@ public class GameServiceImpl : GameService.GameServiceBase
 
     public GameServiceImpl()
     {
-        var channel = GrpcChannel.ForAddress("http://localhost:5131");
+        var channel = GrpcChannel.ForAddress("http://localhost:5000");
         _ormClient = new lab4_bd_server.Orm.OrmClient(channel);
     }
 
