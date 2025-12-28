@@ -1,16 +1,19 @@
 ﻿using Grpc.Core;
-using TicTacToe.App.Protos;
+using TicTacToe.App.Protos; // Пространство имен основной игры
 using TicTacToeServer.Logic;
-using Npgsql;
 using Consul;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using System.Net;
 using System.Net.Sockets;
-using System.Text; // Добавлено для кодировки текста
+using System.Text;
+using Grpc.Net.Client;
+using lab4_bd_server; // Пространство имен ORM
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Настройки порта и адреса Consul
+// Поддержка HTTP/2 без TLS
+AppContext.SetSwitch("System.Net.Http.SocketsHttpHandler.Http2UnencryptedSupport", true);
+
 var port = builder.Configuration.GetValue<int>("port", 5001);
 var consulAddr = builder.Configuration.GetValue<string>("ConsulAddress") ?? "http://localhost:8500";
 
@@ -19,7 +22,6 @@ builder.WebHost.ConfigureKestrel(options =>
     options.ListenAnyIP(port, listenOptions =>
     {
         listenOptions.Protocols = HttpProtocols.Http2;
-        listenOptions.UseHttps();
     });
 });
 
@@ -34,10 +36,7 @@ app.Lifetime.ApplicationStarted.Register(async () =>
     {
         var consul = new ConsulClient(c => c.Address = new Uri(consulAddr));
         var hostIp = GetLocalIPAddress();
-
         var serviceId = $"tictactoe-{port}";
-
-        Console.WriteLine($"[Consul] Регистрация сервиса {serviceId} на {hostIp}:{port} (Consul: {consulAddr})");
 
         await consul.Agent.ServiceRegister(new AgentServiceRegistration
         {
@@ -49,117 +48,48 @@ app.Lifetime.ApplicationStarted.Register(async () =>
             {
                 TCP = $"{hostIp}:{port}",
                 Interval = TimeSpan.FromSeconds(5),
-                DeregisterCriticalServiceAfter = TimeSpan.FromSeconds(5)
+                DeregisterCriticalServiceAfter = TimeSpan.FromSeconds(30)
             }
         });
 
-        // --- МЕХАНИЗМ БОРЬБЫ ЗА ЛИДЕРСТВО ---
         _ = Task.Run(async () =>
         {
             string leaderKey = "service/tictactoe-service/leader";
-            string myUrl = $"https://{hostIp}:{port}";
+            string myUrl = $"http://{hostIp}:{port}";
 
             while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
             {
                 string sessionId = null!;
-                CancellationTokenSource? renewCts = null;
                 try
                 {
-                    var sessionEntry = new SessionEntry
+                    var sessResp = await consul.Session.Create(new SessionEntry
                     {
-                        Name = $"tictactoe-leader-session-{port}",
-                        TTL = TimeSpan.FromSeconds(10),   // <--- уменьшили TTL
-                        LockDelay = TimeSpan.Zero,
-                        Behavior = SessionBehavior.Delete // удалять ключ при потере сессии
-                    };
-
-                    var sessResp = await consul.Session.Create(sessionEntry);
+                        Name = $"tictactoe-leader-{port}",
+                        TTL = TimeSpan.FromSeconds(10),
+                        Behavior = SessionBehavior.Delete
+                    });
                     sessionId = sessResp.Response;
-                    Console.WriteLine($"[Leader] Created session {sessionId}");
 
-                    // Запускаем явный renew loop, чтобы ловить ошибки
-                    renewCts = new CancellationTokenSource();
-                    var renewTask = Task.Run(async () =>
-                    {
-                        while (!renewCts.Token.IsCancellationRequested)
-                        {
-                            try
-                            {
-                                await consul.Session.Renew(sessionId);
-                            }
-                            catch (Exception ex)
-                            {
-                                Console.WriteLine($"[Leader][Renew] error: {ex.Message}");
-                                throw; // выйдем чтобы пройти к cleanup
-                            }
-                            await Task.Delay(TimeSpan.FromSeconds(2), renewCts.Token); // renew каждые 2s
-                        }
-                    }, renewCts.Token);
-
-                    // Попытка захватить ключ
                     var kv = new KVPair(leaderKey) { Session = sessionId, Value = Encoding.UTF8.GetBytes(myUrl) };
                     var acquired = (await consul.KV.Acquire(kv)).Response;
 
                     if (acquired)
                     {
-                        Console.WriteLine($"[Leader] Server {port} became leader (session {sessionId})");
-
-                        // держим лидерство, пока KV привязан к нашей сессии
-                        while (!renewCts.Token.IsCancellationRequested)
+                        while (acquired && !app.Lifetime.ApplicationStopping.IsCancellationRequested)
                         {
+                            await consul.Session.Renew(sessionId);
+                            await Task.Delay(3000);
                             var current = await consul.KV.Get(leaderKey);
-                            if (current.Response == null || current.Response.Session != sessionId)
-                            {
-                                Console.WriteLine("[Leader] leadership lost (session mismatch)");
-                                break;
-                            }
-                            await Task.Delay(500, renewCts.Token);
+                            if (current.Response == null || current.Response.Session != sessionId) break;
                         }
                     }
-                    else
-                    {
-                        Console.WriteLine("[Leader] failed to acquire, waiting...");
-                        // ждём, пока лидер сменится
-                        await Task.Delay(1000);
-                    }
                 }
-                catch (OperationCanceledException) { /* выход по отмене */ }
-                catch (Exception ex)
-                {
-                    Console.WriteLine($"[Leader Error] {ex}");
-                }
-                finally
-                {
-                    // Cleanup: пробуем релиз и уничтожение сессии
-                    try
-                    {
-                        if (!string.IsNullOrEmpty(sessionId))
-                        {
-                            // Попытка освободить ключ (безопасна)
-                            await consul.KV.Release(new KVPair(leaderKey) { Session = sessionId });
-                            // Уничтожаем сессию, чтобы ключ не висел
-                            await consul.Session.Destroy(sessionId);
-                            Console.WriteLine($"[Leader] session {sessionId} destroyed");
-                        }
-                    }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine($"[Leader][Cleanup] {ex.Message}");
-                    }
-
-                    renewCts?.Cancel();
-                    renewCts?.Dispose();
-
-                    await Task.Delay(500); // небольшая пауза перед новой попыткой
-                }
+                catch { await Task.Delay(2000); }
+                finally { if (sessionId != null) await consul.Session.Destroy(sessionId); }
             }
         });
-        // --- КОНЕЦ МЕХАНИЗМА БОРЬБЫ ЗА ЛИДЕРСТВО ---
     }
-    catch (Exception ex)
-    {
-        Console.WriteLine($"[Consul Error] {ex.Message}");
-    }
+    catch (Exception ex) { Console.WriteLine($"[Consul Error] {ex.Message}"); }
 });
 
 app.Run();
@@ -167,29 +97,37 @@ app.Run();
 static string GetLocalIPAddress()
 {
     var host = Dns.GetHostEntry(Dns.GetHostName());
-    foreach (var ip in host.AddressList)
-        if (ip.AddressFamily == AddressFamily.InterNetwork && !ip.ToString().StartsWith("127."))
-            return ip.ToString();
-    return "127.0.0.1";
+    return host.AddressList.FirstOrDefault(ip => ip.AddressFamily == AddressFamily.InterNetwork && !ip.ToString().StartsWith("127."))?.ToString() ?? "127.0.0.1";
 }
 
 public class GameServiceImpl : GameService.GameServiceBase
 {
-    private const string ConnStr = "Host=localhost;Port=5433;Username=postgres;Password=mysecretpassword;Database=postgres";
+    private readonly lab4_bd_server.Orm.OrmClient _ormClient;
 
-    public override async Task<CheckResponse> CheckSession(CheckRequest r, ServerCallContext c)
+    public GameServiceImpl()
     {
-        using var conn = new NpgsqlConnection(ConnStr);
-        await conn.OpenAsync();
-        using var cmd = new NpgsqlCommand("SELECT game_id FROM games WHERE player_x = @p OR player_o = @p LIMIT 1", conn);
-        cmd.Parameters.AddWithValue("p", r.PlayerId);
-        var result = await cmd.ExecuteScalarAsync();
+        var channel = GrpcChannel.ForAddress("http://localhost:5131");
+        _ormClient = new lab4_bd_server.Orm.OrmClient(channel);
+    }
 
-        return new CheckResponse
+    // Здесь и далее используем полные имена типов, чтобы избежать неоднозначности
+    public override async Task<TicTacToe.App.Protos.CheckResponse> CheckSession(TicTacToe.App.Protos.CheckRequest r, ServerCallContext c)
+    {
+        try 
         {
-            Exists = result != null,
-            GameId = result?.ToString() ?? ""
-        };
+            var ormResp = await _ormClient.CheckSessionAsync(new lab4_bd_server.CheckRequest { PlayerId = r.PlayerId });
+            return new TicTacToe.App.Protos.CheckResponse
+            {
+                Exists = ormResp.Exists,
+                GameId = ormResp.GameId
+            };
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"!!! ОШИБКА В CheckSession: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
+            throw; // Пробрасываем дальше для gRPC
+        }
     }
 
     public override async Task<GameResponse> CreateGame(CreateRequest r, ServerCallContext c)
@@ -200,7 +138,6 @@ public class GameServiceImpl : GameService.GameServiceBase
         var roomId = parts[1];
 
         var g = await Load(roomId);
-
         if (g == null)
         {
             g = new UltimateGameLogic { PlayerX = nick, PlayerO = "" };
@@ -232,36 +169,28 @@ public class GameServiceImpl : GameService.GameServiceBase
         return Map(r.GameId, newLogic);
     }
 
-    public override async Task<ExitResponse> ExitGame(ExitRequest r, ServerCallContext c)
+    public override async Task<TicTacToe.App.Protos.ExitResponse> ExitGame(TicTacToe.App.Protos.ExitRequest r, ServerCallContext c)
     {
-        var g = await Load(r.GameId);
-        if (g != null)
-        {
-            if (g.PlayerX == r.PlayerId) g.PlayerX = "";
-            else if (g.PlayerO == r.PlayerId) g.PlayerO = "";
-
-            if (string.IsNullOrEmpty(g.PlayerX) && string.IsNullOrEmpty(g.PlayerO))
-            {
-                using var conn = new NpgsqlConnection(ConnStr);
-                await conn.OpenAsync();
-                using var cmd = new NpgsqlCommand("DELETE FROM games WHERE game_id = @id", conn);
-                cmd.Parameters.AddWithValue("id", r.GameId);
-                await cmd.ExecuteNonQueryAsync();
-            }
-            else await Save(r.GameId, g);
-        }
-        return new ExitResponse { Success = true };
+        var ormResp = await _ormClient.ExitGameAsync(new lab4_bd_server.ExitRequest 
+        { 
+            GameId = r.GameId, 
+            PlayerId = r.PlayerId 
+        });
+        
+        return new TicTacToe.App.Protos.ExitResponse { Success = ormResp.Success };
     }
 
     public override async Task<GameResponse> MakeMove(MoveRequest r, ServerCallContext c)
     {
         var g = await Load(r.GameId);
         if (g == null) return new GameResponse { Error = "Комната не найдена" };
+        
         lock (g)
         {
             if (g.ValidMove(r.BoardX, r.BoardY, r.CellX, r.CellY, r.PlayerId))
                 g.MakeMove(r.BoardX, r.BoardY, r.CellX, r.CellY);
         }
+        
         await Save(r.GameId, g);
         return Map(r.GameId, g);
     }
@@ -274,46 +203,49 @@ public class GameServiceImpl : GameService.GameServiceBase
 
     private async Task Save(string id, UltimateGameLogic g)
     {
-        using var conn = new NpgsqlConnection(ConnStr);
-        await conn.OpenAsync();
-        var sql = @"INSERT INTO games (game_id, cells, small_winners, active_board_x, active_board_y, player_x, player_o, is_x_turn, status)
-                    VALUES (@id, @c, @sw, @ax, @ay, @px, @po, @t, @s)
-                    ON CONFLICT (game_id) DO UPDATE SET cells=@c, small_winners=@sw, active_board_x=@ax, active_board_y=@ay, player_x=@px, player_o=@po, is_x_turn=@t, status=@s";
-        using var cmd = new NpgsqlCommand(sql, conn);
-        cmd.Parameters.AddWithValue("id", id);
-        cmd.Parameters.AddWithValue("c", new string(g.Cells));
-        cmd.Parameters.AddWithValue("sw", new string(g.SmallWinners));
-        cmd.Parameters.AddWithValue("ax", g.ActiveBoardX);
-        cmd.Parameters.AddWithValue("ay", g.ActiveBoardY);
-        cmd.Parameters.AddWithValue("px", g.PlayerX ?? "");
-        cmd.Parameters.AddWithValue("po", g.PlayerO ?? "");
-        cmd.Parameters.AddWithValue("t", g.IsXTurn);
-        cmd.Parameters.AddWithValue("s", g.Status);
-        await cmd.ExecuteNonQueryAsync();
+        var gameMsg = new lab4_bd_server.Game
+        {
+            Cells = new string(g.Cells),
+            SmallWinners = new string(g.SmallWinners),
+            ActiveBoardX = g.ActiveBoardX,
+            ActiveBoardY = g.ActiveBoardY,
+            PlayerX = g.PlayerX ?? "",
+            PlayerO = g.PlayerO ?? "",
+            IsXTurn = g.IsXTurn,
+            Status = g.Status
+        };
+
+        await _ormClient.SaveAsync(new lab4_bd_server.SaveRequest 
+        { 
+            GameId = id, 
+            Game = gameMsg 
+        });
     }
 
     private async Task<UltimateGameLogic?> Load(string id)
     {
         try
         {
-            using var conn = new NpgsqlConnection(ConnStr);
-            await conn.OpenAsync();
-            using var cmd = new NpgsqlCommand("SELECT cells, small_winners, active_board_x, active_board_y, player_x, player_o, is_x_turn, status FROM games WHERE game_id=@id", conn);
-            cmd.Parameters.AddWithValue("id", id);
-            using var dr = await cmd.ExecuteReaderAsync();
-            if (await dr.ReadAsync()) return new UltimateGameLogic
+            var resp = await _ormClient.LoadAsync(new lab4_bd_server.LoadRequest { GameId = id });
+            if (resp.Success && resp.Game != null)
             {
-                Cells = dr.GetString(0).ToCharArray(),
-                SmallWinners = dr.GetString(1).ToCharArray(),
-                ActiveBoardX = dr.GetInt32(2),
-                ActiveBoardY = dr.GetInt32(3),
-                PlayerX = dr.GetString(4),
-                PlayerO = dr.GetString(5),
-                IsXTurn = dr.GetBoolean(6),
-                Status = dr.GetString(7)
-            };
+                return new UltimateGameLogic
+                {
+                    Cells = resp.Game.Cells.ToCharArray(),
+                    SmallWinners = resp.Game.SmallWinners.ToCharArray(),
+                    ActiveBoardX = resp.Game.ActiveBoardX,
+                    ActiveBoardY = resp.Game.ActiveBoardY,
+                    PlayerX = resp.Game.PlayerX,
+                    PlayerO = resp.Game.PlayerO,
+                    IsXTurn = resp.Game.IsXTurn,
+                    Status = resp.Game.Status
+                };
+            }
         }
-        catch { }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"[ORM Load Error] {ex.Message}");
+        }
         return null;
     }
 

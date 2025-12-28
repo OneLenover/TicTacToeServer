@@ -46,12 +46,77 @@ TicTacToeServer.slnx
 TicTacToeServer/appsettings.json
 TicTacToeServer/Program.cs
 TicTacToeServer/Protos/GameService.proto
+TicTacToeServer/Protos/orm.proto
 TicTacToeServer/TicTacToeServer.csproj
 TicTacToeServer/UltimateGameLogic.cs
 </directory_structure>
 
 <files>
 This section contains the contents of the repository's files.
+
+<file path="TicTacToeServer/Protos/orm.proto">
+syntax = "proto3";
+
+option csharp_namespace = "lab4_bd_server";
+
+service Orm {
+
+  rpc CheckSession (CheckRequest) returns (CheckResponse);
+
+  rpc ExitGame (ExitRequest) returns (ExitResponse);
+
+  rpc Load (LoadRequest) returns (LoadResponse);
+
+  rpc Save (SaveRequest) returns (SaveResponse);
+}
+
+message CheckRequest {
+    string playerId = 1;
+}
+
+message CheckResponse {
+    string gameId = 1;
+    bool exists = 2;
+}
+
+message ExitRequest {
+    string gameId = 1;
+    string playerId = 2;
+}
+
+message ExitResponse {
+    bool success = 1;
+}
+
+message LoadRequest {
+    string gameId = 1;
+}
+
+message LoadResponse {
+    bool success = 1;
+    Game game = 2;
+}
+
+message SaveRequest {
+    Game game = 1;
+    string gameId = 2;
+}
+
+message SaveResponse {
+    bool success = 1;
+}
+
+message Game {
+    string cells = 1;
+    string smallWinners = 2;
+    int32 activeBoardX = 3; 
+    int32 activeBoardY = 4; 
+    string playerX = 5;
+    string playerO = 6;
+    bool isXTurn = 7;
+    string status = 8;
+}
+</file>
 
 <file path=".gitattributes">
 ###############################################################################
@@ -491,18 +556,6 @@ FodyWeavers.xsd
 </Solution>
 </file>
 
-<file path="TicTacToeServer/appsettings.json">
-{
-  "ConsulAddress": "http://127.0.0.1:8500",
-  "port": 5001,
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information"
-    }
-  }
-}
-</file>
-
 <file path="TicTacToeServer/Protos/GameService.proto">
 syntax = "proto3";
 
@@ -637,6 +690,45 @@ namespace TicTacToeServer.Logic
 }
 </file>
 
+<file path="TicTacToeServer/appsettings.json">
+{
+  "ConsulAddress": "http://localhost:8500",
+  "port": 5001,
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information"
+    }
+  }
+}
+</file>
+
+<file path="TicTacToeServer/TicTacToeServer.csproj">
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <!-- Изменено с net10.0 на net9.0 -->
+    <TargetFramework>net9.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Consul" Version="1.7.14.9" />
+    <PackageReference Include="Grpc.AspNetCore" Version="2.60.0" />
+    <PackageReference Include="Npgsql" Version="10.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\GameService.proto" GrpcServices="Server" Link="Protos\GameService.proto" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Protobuf Include="Protos\orm.proto" GrpcServices="Orm" Link="Protos\orm.proto" />
+  </ItemGroup>
+
+</Project>
+</file>
+
 <file path="TicTacToeServer/Program.cs">
 using Grpc.Core;
 using TicTacToe.App.Protos;
@@ -646,6 +738,9 @@ using Consul;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using System.Net;
 using System.Net.Sockets;
+using System.Text; // Добавлено для кодировки текста
+using Grpc.Net.Client;
+using lab4_bd_server;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -688,9 +783,112 @@ app.Lifetime.ApplicationStarted.Register(async () =>
             {
                 TCP = $"{hostIp}:{port}",
                 Interval = TimeSpan.FromSeconds(5),
-                DeregisterCriticalServiceAfter = TimeSpan.FromMinutes(1)
+                DeregisterCriticalServiceAfter = TimeSpan.FromSeconds(5)
             }
         });
+
+        // --- МЕХАНИЗМ БОРЬБЫ ЗА ЛИДЕРСТВО ---
+        _ = Task.Run(async () =>
+        {
+            string leaderKey = "service/tictactoe-service/leader";
+            string myUrl = $"https://{hostIp}:{port}";
+
+            while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
+            {
+                string sessionId = null!;
+                CancellationTokenSource? renewCts = null;
+                try
+                {
+                    var sessionEntry = new SessionEntry
+                    {
+                        Name = $"tictactoe-leader-session-{port}",
+                        TTL = TimeSpan.FromSeconds(10),   // <--- уменьшили TTL
+                        LockDelay = TimeSpan.Zero,
+                        Behavior = SessionBehavior.Delete // удалять ключ при потере сессии
+                    };
+
+                    var sessResp = await consul.Session.Create(sessionEntry);
+                    sessionId = sessResp.Response;
+                    Console.WriteLine($"[Leader] Created session {sessionId}");
+
+                    // Запускаем явный renew loop, чтобы ловить ошибки
+                    renewCts = new CancellationTokenSource();
+                    var renewTask = Task.Run(async () =>
+                    {
+                        while (!renewCts.Token.IsCancellationRequested)
+                        {
+                            try
+                            {
+                                await consul.Session.Renew(sessionId);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Leader][Renew] error: {ex.Message}");
+                                throw; // выйдем чтобы пройти к cleanup
+                            }
+                            await Task.Delay(TimeSpan.FromSeconds(2), renewCts.Token); // renew каждые 2s
+                        }
+                    }, renewCts.Token);
+
+                    // Попытка захватить ключ
+                    var kv = new KVPair(leaderKey) { Session = sessionId, Value = Encoding.UTF8.GetBytes(myUrl) };
+                    var acquired = (await consul.KV.Acquire(kv)).Response;
+
+                    if (acquired)
+                    {
+                        Console.WriteLine($"[Leader] Server {port} became leader (session {sessionId})");
+
+                        // держим лидерство, пока KV привязан к нашей сессии
+                        while (!renewCts.Token.IsCancellationRequested)
+                        {
+                            var current = await consul.KV.Get(leaderKey);
+                            if (current.Response == null || current.Response.Session != sessionId)
+                            {
+                                Console.WriteLine("[Leader] leadership lost (session mismatch)");
+                                break;
+                            }
+                            await Task.Delay(500, renewCts.Token);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("[Leader] failed to acquire, waiting...");
+                        // ждём, пока лидер сменится
+                        await Task.Delay(1000);
+                    }
+                }
+                catch (OperationCanceledException) { /* выход по отмене */ }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Leader Error] {ex}");
+                }
+                finally
+                {
+                    // Cleanup: пробуем релиз и уничтожение сессии
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(sessionId))
+                        {
+                            // Попытка освободить ключ (безопасна)
+                            await consul.KV.Release(new KVPair(leaderKey) { Session = sessionId });
+                            // Уничтожаем сессию, чтобы ключ не висел
+                            await consul.Session.Destroy(sessionId);
+                            Console.WriteLine($"[Leader] session {sessionId} destroyed");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Leader][Cleanup] {ex.Message}");
+                    }
+
+                    renewCts?.Cancel();
+                    renewCts?.Dispose();
+
+                    await Task.Delay(500); // небольшая пауза перед новой попыткой
+                }
+            }
+        });
+        // --- КОНЕЦ МЕХАНИЗМА БОРЬБЫ ЗА ЛИДЕРСТВО ---
     }
     catch (Exception ex)
     {
@@ -711,7 +909,17 @@ static string GetLocalIPAddress()
 
 public class GameServiceImpl : GameService.GameServiceBase
 {
-    private const string ConnStr = "Host=localhost;Port=5433;Username=postgres;Password=mysecretpassword;Database=postgres";
+    private Orm.OrmClient? _client;
+    private GrpcChannel? _currentChannel;
+    public GameServiceImpl()
+    {
+        
+        _currentChannel = GrpcChannel.ForAddress("http://localhost:5006");
+        _client = new Orm.OrmClient(_currentChannel);
+        
+    }
+
+    private const string ConnStr = "Host=localhost;Username=admin;Password=password;Database=tictactoe";
 
     public override async Task<CheckResponse> CheckSession(CheckRequest r, ServerCallContext c)
     {
@@ -867,29 +1075,6 @@ public class GameServiceImpl : GameService.GameServiceBase
         PlayerO = g.PlayerO ?? ""
     };
 }
-</file>
-
-<file path="TicTacToeServer/TicTacToeServer.csproj">
-<Project Sdk="Microsoft.NET.Sdk.Web">
-
-  <PropertyGroup>
-    <!-- Изменено с net10.0 на net9.0 -->
-    <TargetFramework>net9.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
-  </PropertyGroup>
-
-  <ItemGroup>
-    <PackageReference Include="Consul" Version="1.7.14.9" />
-    <PackageReference Include="Grpc.AspNetCore" Version="2.60.0" />
-    <PackageReference Include="Npgsql" Version="10.0.1" />
-  </ItemGroup>
-
-  <ItemGroup>
-    <Protobuf Include="Protos\GameService.proto" GrpcServices="Server" Link="Protos\GameService.proto" />
-  </ItemGroup>
-
-</Project>
 </file>
 
 </files>

@@ -17,4 +17,8 @@
     <Protobuf Include="Protos\GameService.proto" GrpcServices="Server" Link="Protos\GameService.proto" />
   </ItemGroup>
 
+  <ItemGroup>
+    <Protobuf Include="Protos\orm.proto" GrpcServices="Orm" Link="Protos\orm.proto" />
+  </ItemGroup>
+
 </Project>

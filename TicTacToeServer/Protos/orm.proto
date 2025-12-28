@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+option csharp_namespace = "lab4_bd_server";
+
+service Orm {
+
+  rpc CheckSession (CheckRequest) returns (CheckResponse);
+
+  rpc ExitGame (ExitRequest) returns (ExitResponse);
+
+  rpc Load (LoadRequest) returns (LoadResponse);
+
+  rpc Save (SaveRequest) returns (SaveResponse);
+}
+
+message CheckRequest {
+    string playerId = 1;
+}
+
+message CheckResponse {
+    string gameId = 1;
+    bool exists = 2;
+}
+
+message ExitRequest {
+    string gameId = 1;
+    string playerId = 2;
+}
+
+message ExitResponse {
+    bool success = 1;
+}
+
+message LoadRequest {
+    string gameId = 1;
+}
+
+message LoadResponse {
+    bool success = 1;
+    Game game = 2;
+}
+
+message SaveRequest {
+    Game game = 1;
+    string gameId = 2;
+}
+
+message SaveResponse {
+    bool success = 1;
+}
+
+message Game {
+    string cells = 1;
+    string smallWinners = 2;
+    int32 activeBoardX = 3; 
+    int32 activeBoardY = 4; 
+    string playerX = 5;
+    string playerO = 6;
+    bool isXTurn = 7;
+    string status = 8;
+}
