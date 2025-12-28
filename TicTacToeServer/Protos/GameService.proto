@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+option csharp_namespace = "TicTacToe.App.Protos";
+
+service GameService {
+    rpc CreateGame (CreateRequest) returns (GameResponse);
+    rpc MakeMove (MoveRequest) returns (GameResponse);
+    rpc GetState (StateRequest) returns (GameResponse);
+    rpc CheckSession (CheckRequest) returns (CheckResponse);
+    rpc ResetGame (StateRequest) returns (GameResponse);
+    rpc ExitGame (ExitRequest) returns (ExitResponse);
+}
+
+message CheckRequest {
+    string playerId = 1;
+}
+
+message CheckResponse {
+    string gameId = 1;
+    bool exists = 2;
+}
+
+message CreateRequest {
+    string playerId = 1; // Формат "Nickname|RoomID"
+}
+
+message StateRequest {
+    string gameId = 1;
+    string playerId = 2; 
+}
+
+message MoveRequest {
+    string gameId = 1;
+    string playerId = 2;
+    int32 boardX = 3;
+    int32 boardY = 4;
+    int32 cellX = 5;
+    int32 cellY = 6;
+}
+
+message ExitRequest {
+    string gameId = 1;
+    string playerId = 2;
+}
+
+message ExitResponse {
+    bool success = 1;
+}
+
+message GameResponse {
+    string gameId = 1;
+    string fullBoard = 2;
+    string smallBoardWinners = 3;
+    string currentPlayerId = 4;
+    string status = 5;
+    int32 activeBoardX = 6;      
+    int32 activeBoardY = 7;
+    string error = 8;
+    string playerX = 9;  // Добавлено поле
+    string playerO = 10; // Добавлено поле
+}

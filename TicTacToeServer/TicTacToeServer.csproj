@@ -14,7 +14,7 @@
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="..\..\TicTacToeClient-1-\TicTacToeClient(1)\Protos\GameService.proto" GrpcServices="Server" Link="Protos\GameService.proto" />
+    <Protobuf Include="Protos\GameService.proto" GrpcServices="Server" Link="Protos\GameService.proto" />
   </ItemGroup>
 
 </Project>
