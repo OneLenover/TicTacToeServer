@@ -53,25 +53,6 @@ TicTacToeServer/UltimateGameLogic.cs
 <files>
 This section contains the contents of the repository's files.
 
-<file path="TicTacToeServer/appsettings.json">
-{
-  "Logging": {
-    "LogLevel": {
-      "Default": "Information",
-      "Microsoft.AspNetCore": "Warning"
-    }
-  },
-  "AllowedHosts": "*",
-  "Consul": {
-    "Address": "http://localhost:8500",
-    "ServiceName": "tictactoe-service"
-  },
-  "GameSettings": {
-    "DbConnection": "Host=localhost;Port=5433;Username=postgres;Password=mysecretpassword;Database=postgres"
-  }
-}
-</file>
-
 <file path=".gitattributes">
 ###############################################################################
 # Set default behavior to automatically normalize line endings.
@@ -508,6 +489,18 @@ FodyWeavers.xsd
 <Solution>
   <Project Path="TicTacToeServer/TicTacToeServer.csproj" />
 </Solution>
+</file>
+
+<file path="TicTacToeServer/appsettings.json">
+{
+  "ConsulAddress": "http://127.0.0.1:8500",
+  "port": 5001,
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information"
+    }
+  }
+}
 </file>
 
 <file path="TicTacToeServer/Protos/GameService.proto">

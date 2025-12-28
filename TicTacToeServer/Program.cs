@@ -6,6 +6,7 @@ using Consul;
 using Microsoft.AspNetCore.Server.Kestrel.Core;
 using System.Net;
 using System.Net.Sockets;
+using System.Text; // Добавлено для кодировки текста
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -48,9 +49,112 @@ app.Lifetime.ApplicationStarted.Register(async () =>
             {
                 TCP = $"{hostIp}:{port}",
                 Interval = TimeSpan.FromSeconds(5),
-                DeregisterCriticalServiceAfter = TimeSpan.FromMinutes(1)
+                DeregisterCriticalServiceAfter = TimeSpan.FromSeconds(5)
             }
         });
+
+        // --- МЕХАНИЗМ БОРЬБЫ ЗА ЛИДЕРСТВО ---
+        _ = Task.Run(async () =>
+        {
+            string leaderKey = "service/tictactoe-service/leader";
+            string myUrl = $"https://{hostIp}:{port}";
+
+            while (!app.Lifetime.ApplicationStopping.IsCancellationRequested)
+            {
+                string sessionId = null!;
+                CancellationTokenSource? renewCts = null;
+                try
+                {
+                    var sessionEntry = new SessionEntry
+                    {
+                        Name = $"tictactoe-leader-session-{port}",
+                        TTL = TimeSpan.FromSeconds(10),   // <--- уменьшили TTL
+                        LockDelay = TimeSpan.Zero,
+                        Behavior = SessionBehavior.Delete // удалять ключ при потере сессии
+                    };
+
+                    var sessResp = await consul.Session.Create(sessionEntry);
+                    sessionId = sessResp.Response;
+                    Console.WriteLine($"[Leader] Created session {sessionId}");
+
+                    // Запускаем явный renew loop, чтобы ловить ошибки
+                    renewCts = new CancellationTokenSource();
+                    var renewTask = Task.Run(async () =>
+                    {
+                        while (!renewCts.Token.IsCancellationRequested)
+                        {
+                            try
+                            {
+                                await consul.Session.Renew(sessionId);
+                            }
+                            catch (Exception ex)
+                            {
+                                Console.WriteLine($"[Leader][Renew] error: {ex.Message}");
+                                throw; // выйдем чтобы пройти к cleanup
+                            }
+                            await Task.Delay(TimeSpan.FromSeconds(2), renewCts.Token); // renew каждые 2s
+                        }
+                    }, renewCts.Token);
+
+                    // Попытка захватить ключ
+                    var kv = new KVPair(leaderKey) { Session = sessionId, Value = Encoding.UTF8.GetBytes(myUrl) };
+                    var acquired = (await consul.KV.Acquire(kv)).Response;
+
+                    if (acquired)
+                    {
+                        Console.WriteLine($"[Leader] Server {port} became leader (session {sessionId})");
+
+                        // держим лидерство, пока KV привязан к нашей сессии
+                        while (!renewCts.Token.IsCancellationRequested)
+                        {
+                            var current = await consul.KV.Get(leaderKey);
+                            if (current.Response == null || current.Response.Session != sessionId)
+                            {
+                                Console.WriteLine("[Leader] leadership lost (session mismatch)");
+                                break;
+                            }
+                            await Task.Delay(500, renewCts.Token);
+                        }
+                    }
+                    else
+                    {
+                        Console.WriteLine("[Leader] failed to acquire, waiting...");
+                        // ждём, пока лидер сменится
+                        await Task.Delay(1000);
+                    }
+                }
+                catch (OperationCanceledException) { /* выход по отмене */ }
+                catch (Exception ex)
+                {
+                    Console.WriteLine($"[Leader Error] {ex}");
+                }
+                finally
+                {
+                    // Cleanup: пробуем релиз и уничтожение сессии
+                    try
+                    {
+                        if (!string.IsNullOrEmpty(sessionId))
+                        {
+                            // Попытка освободить ключ (безопасна)
+                            await consul.KV.Release(new KVPair(leaderKey) { Session = sessionId });
+                            // Уничтожаем сессию, чтобы ключ не висел
+                            await consul.Session.Destroy(sessionId);
+                            Console.WriteLine($"[Leader] session {sessionId} destroyed");
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine($"[Leader][Cleanup] {ex.Message}");
+                    }
+
+                    renewCts?.Cancel();
+                    renewCts?.Dispose();
+
+                    await Task.Delay(500); // небольшая пауза перед новой попыткой
+                }
+            }
+        });
+        // --- КОНЕЦ МЕХАНИЗМА БОРЬБЫ ЗА ЛИДЕРСТВО ---
     }
     catch (Exception ex)
     {
