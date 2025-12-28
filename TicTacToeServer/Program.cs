@@ -9,14 +9,16 @@ using System.Net.Sockets;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Настройки порта и адреса Consul
 var port = builder.Configuration.GetValue<int>("port", 5001);
+var consulAddr = builder.Configuration.GetValue<string>("ConsulAddress") ?? "http://localhost:8500";
 
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.ListenAnyIP(port, listenOptions =>
     {
         listenOptions.Protocols = HttpProtocols.Http2;
-        listenOptions.UseHttps(); 
+        listenOptions.UseHttps();
     });
 });
 
@@ -29,32 +31,41 @@ app.Lifetime.ApplicationStarted.Register(async () =>
 {
     try
     {
-        var consulAddr = Environment.GetEnvironmentVariable("CONSUL_HTTP_ADDR") ?? "http://localhost:8500";
         var consul = new ConsulClient(c => c.Address = new Uri(consulAddr));
         var hostIp = GetLocalIPAddress();
 
         var serviceId = $"tictactoe-{port}";
 
-        Console.WriteLine($"[Consul] Регистрация сервиса {serviceId} на {hostIp}:{port}");
+        Console.WriteLine($"[Consul] Регистрация сервиса {serviceId} на {hostIp}:{port} (Consul: {consulAddr})");
 
-        await consul.Agent.ServiceRegister(new AgentServiceRegistration {
-            ID = $"tictactoe-{port}", 
-            Name = "tictactoe-service", 
-            Address = hostIp, 
+        await consul.Agent.ServiceRegister(new AgentServiceRegistration
+        {
+            ID = serviceId,
+            Name = "tictactoe-service",
+            Address = hostIp,
             Port = port,
-            Check = new AgentServiceCheck { 
-                TCP = $"{hostIp}:{port}", 
-                Interval = TimeSpan.FromSeconds(5) 
+            Check = new AgentServiceCheck
+            {
+                TCP = $"{hostIp}:{port}",
+                Interval = TimeSpan.FromSeconds(5),
+                DeregisterCriticalServiceAfter = TimeSpan.FromMinutes(1)
             }
         });
-    } catch { }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Consul Error] {ex.Message}");
+    }
 });
 
 app.Run();
 
-static string GetLocalIPAddress() {
+static string GetLocalIPAddress()
+{
     var host = Dns.GetHostEntry(Dns.GetHostName());
-    foreach (var ip in host.AddressList) if (ip.AddressFamily == AddressFamily.InterNetwork && !ip.ToString().StartsWith("127.")) return ip.ToString();
+    foreach (var ip in host.AddressList)
+        if (ip.AddressFamily == AddressFamily.InterNetwork && !ip.ToString().StartsWith("127."))
+            return ip.ToString();
     return "127.0.0.1";
 }
 
@@ -69,10 +80,11 @@ public class GameServiceImpl : GameService.GameServiceBase
         using var cmd = new NpgsqlCommand("SELECT game_id FROM games WHERE player_x = @p OR player_o = @p LIMIT 1", conn);
         cmd.Parameters.AddWithValue("p", r.PlayerId);
         var result = await cmd.ExecuteScalarAsync();
-        
-        return new CheckResponse { 
-            Exists = result != null, 
-            GameId = result?.ToString() ?? "" 
+
+        return new CheckResponse
+        {
+            Exists = result != null,
+            GameId = result?.ToString() ?? ""
         };
     }
 
@@ -82,17 +94,20 @@ public class GameServiceImpl : GameService.GameServiceBase
         if (parts.Length < 2) return new GameResponse { Error = "Invalid PlayerId format" };
         var nick = parts[0];
         var roomId = parts[1];
-        
+
         var g = await Load(roomId);
-        
-        if (g == null) {
+
+        if (g == null)
+        {
             g = new UltimateGameLogic { PlayerX = nick, PlayerO = "" };
-        } else {
+        }
+        else
+        {
             if (g.PlayerX == nick || g.PlayerO == nick) return Map(roomId, g);
             if (string.IsNullOrWhiteSpace(g.PlayerX)) g.PlayerX = nick;
             else if (string.IsNullOrWhiteSpace(g.PlayerO)) g.PlayerO = nick;
         }
-        
+
         await Save(roomId, g);
         return Map(roomId, g);
     }
@@ -101,14 +116,14 @@ public class GameServiceImpl : GameService.GameServiceBase
     {
         var g = await Load(r.GameId);
         if (g == null) return new GameResponse { Error = "Room not found" };
-        
-        // Создаем абсолютно новый объект логики, сохраняя ники игроков
-        var newLogic = new UltimateGameLogic { 
-            PlayerX = g.PlayerX, 
+
+        var newLogic = new UltimateGameLogic
+        {
+            PlayerX = g.PlayerX,
             PlayerO = g.PlayerO,
-            Status = "Playing" 
+            Status = "Playing"
         };
-        
+
         await Save(r.GameId, newLogic);
         return Map(r.GameId, newLogic);
     }
@@ -138,7 +153,8 @@ public class GameServiceImpl : GameService.GameServiceBase
     {
         var g = await Load(r.GameId);
         if (g == null) return new GameResponse { Error = "Комната не найдена" };
-        lock (g) {
+        lock (g)
+        {
             if (g.ValidMove(r.BoardX, r.BoardY, r.CellX, r.CellY, r.PlayerId))
                 g.MakeMove(r.BoardX, r.BoardY, r.CellX, r.CellY);
         }
@@ -174,25 +190,40 @@ public class GameServiceImpl : GameService.GameServiceBase
 
     private async Task<UltimateGameLogic?> Load(string id)
     {
-        try {
+        try
+        {
             using var conn = new NpgsqlConnection(ConnStr);
             await conn.OpenAsync();
             using var cmd = new NpgsqlCommand("SELECT cells, small_winners, active_board_x, active_board_y, player_x, player_o, is_x_turn, status FROM games WHERE game_id=@id", conn);
             cmd.Parameters.AddWithValue("id", id);
             using var dr = await cmd.ExecuteReaderAsync();
-            if (await dr.ReadAsync()) return new UltimateGameLogic {
-                Cells = dr.GetString(0).ToCharArray(), SmallWinners = dr.GetString(1).ToCharArray(),
-                ActiveBoardX = dr.GetInt32(2), ActiveBoardY = dr.GetInt32(3),
-                PlayerX = dr.GetString(4), PlayerO = dr.GetString(5), IsXTurn = dr.GetBoolean(6), Status = dr.GetString(7)
+            if (await dr.ReadAsync()) return new UltimateGameLogic
+            {
+                Cells = dr.GetString(0).ToCharArray(),
+                SmallWinners = dr.GetString(1).ToCharArray(),
+                ActiveBoardX = dr.GetInt32(2),
+                ActiveBoardY = dr.GetInt32(3),
+                PlayerX = dr.GetString(4),
+                PlayerO = dr.GetString(5),
+                IsXTurn = dr.GetBoolean(6),
+                Status = dr.GetString(7)
             };
-        } catch { }
+        }
+        catch { }
         return null;
     }
 
-    private GameResponse Map(string id, UltimateGameLogic g, string err = "") => new GameResponse {
-        GameId = id, FullBoard = new string(g.Cells), SmallBoardWinners = new string(g.SmallWinners),
-        CurrentPlayerId = (g.IsXTurn ? g.PlayerX : g.PlayerO), 
-        Status = g.Status, ActiveBoardX = g.ActiveBoardX, ActiveBoardY = g.ActiveBoardY, Error = err,
-        PlayerX = g.PlayerX ?? "", PlayerO = g.PlayerO ?? ""
+    private GameResponse Map(string id, UltimateGameLogic g, string err = "") => new GameResponse
+    {
+        GameId = id,
+        FullBoard = new string(g.Cells),
+        SmallBoardWinners = new string(g.SmallWinners),
+        CurrentPlayerId = (g.IsXTurn ? g.PlayerX : g.PlayerO),
+        Status = g.Status,
+        ActiveBoardX = g.ActiveBoardX,
+        ActiveBoardY = g.ActiveBoardY,
+        Error = err,
+        PlayerX = g.PlayerX ?? "",
+        PlayerO = g.PlayerO ?? ""
     };
 }

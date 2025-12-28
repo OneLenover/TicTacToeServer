@@ -43,7 +43,9 @@ The content is organized as follows:
 .gitattributes
 .gitignore
 TicTacToeServer.slnx
+TicTacToeServer/appsettings.json
 TicTacToeServer/Program.cs
+TicTacToeServer/Protos/GameService.proto
 TicTacToeServer/TicTacToeServer.csproj
 TicTacToeServer/UltimateGameLogic.cs
 </directory_structure>
@@ -51,73 +53,22 @@ TicTacToeServer/UltimateGameLogic.cs
 <files>
 This section contains the contents of the repository's files.
 
-<file path="TicTacToeServer/UltimateGameLogic.cs">
-namespace TicTacToeServer.Logic
+<file path="TicTacToeServer/appsettings.json">
 {
-    public class UltimateGameLogic
-    {
-        public char[] Cells { get; set; } = Enumerable.Repeat('.', 81).ToArray();
-        public char[] SmallWinners { get; set; } = Enumerable.Repeat('.', 9).ToArray();
-        public int ActiveBoardX { get; set; } = -1;
-        public int ActiveBoardY { get; set; } = -1;
-        public string PlayerX { get; set; } = "";
-        public string PlayerO { get; set; } = ""; 
-        public bool IsXTurn { get; set; } = true;
-        public string Status { get; set; } = "Playing";
-
-        public bool ValidMove(int bX, int bY, int cX, int cY, string pId)
-        {
-            if (Status != "Playing") return false;
-            
-            string expectedId = IsXTurn ? PlayerX : PlayerO;
-            if (pId != expectedId) return false;
-
-            if (ActiveBoardX != -1 && (bX != ActiveBoardX || bY != ActiveBoardY)) return false;
-            if (SmallWinners[bY * 3 + bX] != '.') return false;
-            if (Cells[(bY * 3 + cY) * 9 + (bX * 3 + cX)] != '.') return false;
-            return true;
-        }
-
-        public void MakeMove(int bX, int bY, int cX, int cY)
-        {
-            char symbol = IsXTurn ? 'X' : 'O';
-            Cells[(bY * 3 + cY) * 9 + (bX * 3 + cX)] = symbol;
-
-            if (CheckWin(GetSmallBoard(bX, bY))) 
-                SmallWinners[bY * 3 + bX] = symbol;
-
-            if (SmallWinners[cY * 3 + cX] == '.' && GetSmallBoard(cX, cY).Contains('.'))
-            {
-                ActiveBoardX = cX; ActiveBoardY = cY;
-            }
-            else
-            {
-                ActiveBoardX = -1; ActiveBoardY = -1;
-            }
-
-            if (CheckWin(SmallWinners)) 
-                Status = symbol == 'X' ? "X_Won" : "O_Won";
-            else if (!Cells.Contains('.')) 
-                Status = "Draw";
-
-            IsXTurn = !IsXTurn;
-        }
-
-        private char[] GetSmallBoard(int bX, int bY)
-        {
-            char[] b = new char[9];
-            for (int y = 0; y < 3; y++)
-                for (int x = 0; x < 3; x++)
-                    b[y * 3 + x] = Cells[(bY * 3 + y) * 9 + (bX * 3 + x)];
-            return b;
-        }
-
-        private bool CheckWin(char[] b)
-        {
-            int[][] w = { new[] {0,1,2}, new[] {3,4,5}, new[] {6,7,8}, new[] {0,3,6}, new[] {1,4,7}, new[] {2,5,8}, new[] {0,4,8}, new[] {2,4,6} };
-            return w.Any(p => b[p[0]] != '.' && b[p[0]] == b[p[1]] && b[p[0]] == b[p[2]]);
-        }
+  "Logging": {
+    "LogLevel": {
+      "Default": "Information",
+      "Microsoft.AspNetCore": "Warning"
     }
+  },
+  "AllowedHosts": "*",
+  "Consul": {
+    "Address": "http://localhost:8500",
+    "ServiceName": "tictactoe-service"
+  },
+  "GameSettings": {
+    "DbConnection": "Host=localhost;Port=5433;Username=postgres;Password=mysecretpassword;Database=postgres"
+  }
 }
 </file>
 
@@ -559,6 +510,140 @@ FodyWeavers.xsd
 </Solution>
 </file>
 
+<file path="TicTacToeServer/Protos/GameService.proto">
+syntax = "proto3";
+
+option csharp_namespace = "TicTacToe.App.Protos";
+
+service GameService {
+    rpc CreateGame (CreateRequest) returns (GameResponse);
+    rpc MakeMove (MoveRequest) returns (GameResponse);
+    rpc GetState (StateRequest) returns (GameResponse);
+    rpc CheckSession (CheckRequest) returns (CheckResponse);
+    rpc ResetGame (StateRequest) returns (GameResponse);
+    rpc ExitGame (ExitRequest) returns (ExitResponse);
+}
+
+message CheckRequest {
+    string playerId = 1;
+}
+
+message CheckResponse {
+    string gameId = 1;
+    bool exists = 2;
+}
+
+message CreateRequest {
+    string playerId = 1; // Формат "Nickname|RoomID"
+}
+
+message StateRequest {
+    string gameId = 1;
+    string playerId = 2; 
+}
+
+message MoveRequest {
+    string gameId = 1;
+    string playerId = 2;
+    int32 boardX = 3;
+    int32 boardY = 4;
+    int32 cellX = 5;
+    int32 cellY = 6;
+}
+
+message ExitRequest {
+    string gameId = 1;
+    string playerId = 2;
+}
+
+message ExitResponse {
+    bool success = 1;
+}
+
+message GameResponse {
+    string gameId = 1;
+    string fullBoard = 2;
+    string smallBoardWinners = 3;
+    string currentPlayerId = 4;
+    string status = 5;
+    int32 activeBoardX = 6;      
+    int32 activeBoardY = 7;
+    string error = 8;
+    string playerX = 9;  // Добавлено поле
+    string playerO = 10; // Добавлено поле
+}
+</file>
+
+<file path="TicTacToeServer/UltimateGameLogic.cs">
+namespace TicTacToeServer.Logic
+{
+    public class UltimateGameLogic
+    {
+        public char[] Cells { get; set; } = Enumerable.Repeat('.', 81).ToArray();
+        public char[] SmallWinners { get; set; } = Enumerable.Repeat('.', 9).ToArray();
+        public int ActiveBoardX { get; set; } = -1;
+        public int ActiveBoardY { get; set; } = -1;
+        public string PlayerX { get; set; } = "";
+        public string PlayerO { get; set; } = ""; 
+        public bool IsXTurn { get; set; } = true;
+        public string Status { get; set; } = "Playing";
+
+        public bool ValidMove(int bX, int bY, int cX, int cY, string pId)
+        {
+            if (Status != "Playing") return false;
+            
+            string expectedId = IsXTurn ? PlayerX : PlayerO;
+            if (pId != expectedId) return false;
+
+            if (ActiveBoardX != -1 && (bX != ActiveBoardX || bY != ActiveBoardY)) return false;
+            if (SmallWinners[bY * 3 + bX] != '.') return false;
+            if (Cells[(bY * 3 + cY) * 9 + (bX * 3 + cX)] != '.') return false;
+            return true;
+        }
+
+        public void MakeMove(int bX, int bY, int cX, int cY)
+        {
+            char symbol = IsXTurn ? 'X' : 'O';
+            Cells[(bY * 3 + cY) * 9 + (bX * 3 + cX)] = symbol;
+
+            if (CheckWin(GetSmallBoard(bX, bY))) 
+                SmallWinners[bY * 3 + bX] = symbol;
+
+            if (SmallWinners[cY * 3 + cX] == '.' && GetSmallBoard(cX, cY).Contains('.'))
+            {
+                ActiveBoardX = cX; ActiveBoardY = cY;
+            }
+            else
+            {
+                ActiveBoardX = -1; ActiveBoardY = -1;
+            }
+
+            if (CheckWin(SmallWinners)) 
+                Status = symbol == 'X' ? "X_Won" : "O_Won";
+            else if (!Cells.Contains('.')) 
+                Status = "Draw";
+
+            IsXTurn = !IsXTurn;
+        }
+
+        private char[] GetSmallBoard(int bX, int bY)
+        {
+            char[] b = new char[9];
+            for (int y = 0; y < 3; y++)
+                for (int x = 0; x < 3; x++)
+                    b[y * 3 + x] = Cells[(bY * 3 + y) * 9 + (bX * 3 + x)];
+            return b;
+        }
+
+        private bool CheckWin(char[] b)
+        {
+            int[][] w = { new[] {0,1,2}, new[] {3,4,5}, new[] {6,7,8}, new[] {0,3,6}, new[] {1,4,7}, new[] {2,5,8}, new[] {0,4,8}, new[] {2,4,6} };
+            return w.Any(p => b[p[0]] != '.' && b[p[0]] == b[p[1]] && b[p[0]] == b[p[2]]);
+        }
+    }
+}
+</file>
+
 <file path="TicTacToeServer/Program.cs">
 using Grpc.Core;
 using TicTacToe.App.Protos;
@@ -571,12 +656,16 @@ using System.Net.Sockets;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// Настройки порта и адреса Consul
+var port = builder.Configuration.GetValue<int>("port", 5001);
+var consulAddr = builder.Configuration.GetValue<string>("ConsulAddress") ?? "http://localhost:8500";
+
 builder.WebHost.ConfigureKestrel(options =>
 {
-    options.ListenAnyIP(5001, listenOptions =>
+    options.ListenAnyIP(port, listenOptions =>
     {
         listenOptions.Protocols = HttpProtocols.Http2;
-        listenOptions.UseHttps(); 
+        listenOptions.UseHttps();
     });
 });
 
@@ -589,21 +678,41 @@ app.Lifetime.ApplicationStarted.Register(async () =>
 {
     try
     {
-        var consul = new ConsulClient(c => c.Address = new Uri("http://localhost:8500"));
+        var consul = new ConsulClient(c => c.Address = new Uri(consulAddr));
         var hostIp = GetLocalIPAddress();
-        var port = 5001; 
-        await consul.Agent.ServiceRegister(new AgentServiceRegistration {
-            ID = $"tictactoe-{port}", Name = "tictactoe-service", Address = hostIp, Port = port,
-            Check = new AgentServiceCheck { TCP = $"{hostIp}:{port}", Interval = TimeSpan.FromSeconds(5) }
+
+        var serviceId = $"tictactoe-{port}";
+
+        Console.WriteLine($"[Consul] Регистрация сервиса {serviceId} на {hostIp}:{port} (Consul: {consulAddr})");
+
+        await consul.Agent.ServiceRegister(new AgentServiceRegistration
+        {
+            ID = serviceId,
+            Name = "tictactoe-service",
+            Address = hostIp,
+            Port = port,
+            Check = new AgentServiceCheck
+            {
+                TCP = $"{hostIp}:{port}",
+                Interval = TimeSpan.FromSeconds(5),
+                DeregisterCriticalServiceAfter = TimeSpan.FromMinutes(1)
+            }
         });
-    } catch { }
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"[Consul Error] {ex.Message}");
+    }
 });
 
 app.Run();
 
-static string GetLocalIPAddress() {
+static string GetLocalIPAddress()
+{
     var host = Dns.GetHostEntry(Dns.GetHostName());
-    foreach (var ip in host.AddressList) if (ip.AddressFamily == AddressFamily.InterNetwork && !ip.ToString().StartsWith("127.")) return ip.ToString();
+    foreach (var ip in host.AddressList)
+        if (ip.AddressFamily == AddressFamily.InterNetwork && !ip.ToString().StartsWith("127."))
+            return ip.ToString();
     return "127.0.0.1";
 }
 
@@ -618,10 +727,11 @@ public class GameServiceImpl : GameService.GameServiceBase
         using var cmd = new NpgsqlCommand("SELECT game_id FROM games WHERE player_x = @p OR player_o = @p LIMIT 1", conn);
         cmd.Parameters.AddWithValue("p", r.PlayerId);
         var result = await cmd.ExecuteScalarAsync();
-        
-        return new CheckResponse { 
-            Exists = result != null, 
-            GameId = result?.ToString() ?? "" 
+
+        return new CheckResponse
+        {
+            Exists = result != null,
+            GameId = result?.ToString() ?? ""
         };
     }
 
@@ -631,17 +741,20 @@ public class GameServiceImpl : GameService.GameServiceBase
         if (parts.Length < 2) return new GameResponse { Error = "Invalid PlayerId format" };
         var nick = parts[0];
         var roomId = parts[1];
-        
+
         var g = await Load(roomId);
-        
-        if (g == null) {
+
+        if (g == null)
+        {
             g = new UltimateGameLogic { PlayerX = nick, PlayerO = "" };
-        } else {
+        }
+        else
+        {
             if (g.PlayerX == nick || g.PlayerO == nick) return Map(roomId, g);
             if (string.IsNullOrWhiteSpace(g.PlayerX)) g.PlayerX = nick;
             else if (string.IsNullOrWhiteSpace(g.PlayerO)) g.PlayerO = nick;
         }
-        
+
         await Save(roomId, g);
         return Map(roomId, g);
     }
@@ -650,14 +763,14 @@ public class GameServiceImpl : GameService.GameServiceBase
     {
         var g = await Load(r.GameId);
         if (g == null) return new GameResponse { Error = "Room not found" };
-        
-        // Создаем абсолютно новый объект логики, сохраняя ники игроков
-        var newLogic = new UltimateGameLogic { 
-            PlayerX = g.PlayerX, 
+
+        var newLogic = new UltimateGameLogic
+        {
+            PlayerX = g.PlayerX,
             PlayerO = g.PlayerO,
-            Status = "Playing" 
+            Status = "Playing"
         };
-        
+
         await Save(r.GameId, newLogic);
         return Map(r.GameId, newLogic);
     }
@@ -687,7 +800,8 @@ public class GameServiceImpl : GameService.GameServiceBase
     {
         var g = await Load(r.GameId);
         if (g == null) return new GameResponse { Error = "Комната не найдена" };
-        lock (g) {
+        lock (g)
+        {
             if (g.ValidMove(r.BoardX, r.BoardY, r.CellX, r.CellY, r.PlayerId))
                 g.MakeMove(r.BoardX, r.BoardY, r.CellX, r.CellY);
         }
@@ -723,26 +837,41 @@ public class GameServiceImpl : GameService.GameServiceBase
 
     private async Task<UltimateGameLogic?> Load(string id)
     {
-        try {
+        try
+        {
             using var conn = new NpgsqlConnection(ConnStr);
             await conn.OpenAsync();
             using var cmd = new NpgsqlCommand("SELECT cells, small_winners, active_board_x, active_board_y, player_x, player_o, is_x_turn, status FROM games WHERE game_id=@id", conn);
             cmd.Parameters.AddWithValue("id", id);
             using var dr = await cmd.ExecuteReaderAsync();
-            if (await dr.ReadAsync()) return new UltimateGameLogic {
-                Cells = dr.GetString(0).ToCharArray(), SmallWinners = dr.GetString(1).ToCharArray(),
-                ActiveBoardX = dr.GetInt32(2), ActiveBoardY = dr.GetInt32(3),
-                PlayerX = dr.GetString(4), PlayerO = dr.GetString(5), IsXTurn = dr.GetBoolean(6), Status = dr.GetString(7)
+            if (await dr.ReadAsync()) return new UltimateGameLogic
+            {
+                Cells = dr.GetString(0).ToCharArray(),
+                SmallWinners = dr.GetString(1).ToCharArray(),
+                ActiveBoardX = dr.GetInt32(2),
+                ActiveBoardY = dr.GetInt32(3),
+                PlayerX = dr.GetString(4),
+                PlayerO = dr.GetString(5),
+                IsXTurn = dr.GetBoolean(6),
+                Status = dr.GetString(7)
             };
-        } catch { }
+        }
+        catch { }
         return null;
     }
 
-    private GameResponse Map(string id, UltimateGameLogic g, string err = "") => new GameResponse {
-        GameId = id, FullBoard = new string(g.Cells), SmallBoardWinners = new string(g.SmallWinners),
-        CurrentPlayerId = (g.IsXTurn ? g.PlayerX : g.PlayerO), 
-        Status = g.Status, ActiveBoardX = g.ActiveBoardX, ActiveBoardY = g.ActiveBoardY, Error = err,
-        PlayerX = g.PlayerX ?? "", PlayerO = g.PlayerO ?? ""
+    private GameResponse Map(string id, UltimateGameLogic g, string err = "") => new GameResponse
+    {
+        GameId = id,
+        FullBoard = new string(g.Cells),
+        SmallBoardWinners = new string(g.SmallWinners),
+        CurrentPlayerId = (g.IsXTurn ? g.PlayerX : g.PlayerO),
+        Status = g.Status,
+        ActiveBoardX = g.ActiveBoardX,
+        ActiveBoardY = g.ActiveBoardY,
+        Error = err,
+        PlayerX = g.PlayerX ?? "",
+        PlayerO = g.PlayerO ?? ""
     };
 }
 </file>
@@ -764,7 +893,7 @@ public class GameServiceImpl : GameService.GameServiceBase
   </ItemGroup>
 
   <ItemGroup>
-    <Protobuf Include="..\..\TicTacToeClient-1-\TicTacToeClient(1)\Protos\GameService.proto" GrpcServices="Server" Link="Protos\GameService.proto" />
+    <Protobuf Include="Protos\GameService.proto" GrpcServices="Server" Link="Protos\GameService.proto" />
   </ItemGroup>
 
 </Project>
