@@ -6,6 +6,9 @@ using Grpc.Net.Client;
 using System.Text;
 using System.Net;
 using System.Net.Sockets;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -99,9 +102,49 @@ app.Lifetime.ApplicationStarted.Register(async () =>
 
 app.Run();
 
-static string GetLocalIPAddress() {
-    var host = Dns.GetHostEntry(Dns.GetHostName());
-    return host.AddressList.FirstOrDefault(i => i.AddressFamily == AddressFamily.InterNetwork && !i.ToString().StartsWith("127."))?.ToString() ?? "127.0.0.1";
+static string GetLocalIPAddress()
+{
+    foreach (var networkInterface in NetworkInterface.GetAllNetworkInterfaces())
+    {
+        // Фильтруем только работающие Ethernet/WiFi адаптеры
+        if (networkInterface.OperationalStatus != OperationalStatus.Up ||
+            (networkInterface.NetworkInterfaceType != NetworkInterfaceType.Wireless80211 &&
+             networkInterface.NetworkInterfaceType != NetworkInterfaceType.Ethernet))
+            continue;
+
+        // Исключаем виртуальные и специфические адаптеры
+        var description = networkInterface.Description.ToLower();
+        if (description.Contains("virtual") ||
+            description.Contains("tailscale") ||
+            description.Contains("tap") ||
+            description.Contains("vpn") ||
+            description.Contains("wsl") ||
+            description.Contains("hyper-v") ||
+            description.Contains("vmware") ||
+            description.Contains("virtualbox"))
+            continue;
+
+        var ipProperties = networkInterface.GetIPProperties();
+        
+        foreach (var ipAddress in ipProperties.UnicastAddresses)
+        {
+            if (ipAddress.Address.AddressFamily == AddressFamily.InterNetwork)
+            {
+                var ip = ipAddress.Address.ToString();
+                
+                // Возвращаем первый не-локальный адрес
+                if (!ip.StartsWith("127.") && 
+                    !ip.StartsWith("169.254.") &&
+                    !ip.StartsWith("192.168.56.") &&
+                    !ip.StartsWith("192.168.137."))
+                {
+                    return ip;
+                }
+            }
+        }
+    }
+    
+    return "127.0.0.1";
 }
 
 public class GameServiceImpl : GameService.GameServiceBase
